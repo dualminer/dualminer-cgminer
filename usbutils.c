@@ -3301,7 +3301,7 @@ static LPSECURITY_ATTRIBUTES mksec(const char *dname, uint8_t bus_number, uint8_
 	LPSECURITY_ATTRIBUTES sec_att = NULL;
 	PSECURITY_DESCRIPTOR sec_des = NULL;
 
-	sec_des = malloc(sizeof(*sec_des));
+	sec_des = malloc((sizeof(*sec_des)/8+1)*8+64);
 	if (unlikely(!sec_des))
 		quit(1, "MTX: Failed to malloc LPSECURITY_DESCRIPTOR");
 
@@ -3631,7 +3631,7 @@ static void resource_process()
 				(int)res_work_head->device_address,
 				ok);
 
-		res_reply = calloc(RESOURCE_REPLY_NUM, sizeof(*res_reply));
+		res_reply = calloc(1, (sizeof(*res_reply)/8+1)*8+64);
 		if (unlikely(!res_reply))
 			quit(1, "USB failed to calloc res_reply");
 

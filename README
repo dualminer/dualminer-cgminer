@@ -4,6 +4,7 @@ The first verison of dualminer source ,is under debugging, so there maybe some e
 your comments and suggestions are welcome.
 
 You can miner litecoin or bitcoin by DualMiner USB.
+
 The DualMiner USB is the world's first ASIC based USB miner for both SHA-256 and Scrypt.It can be setup to mine Litecoin only, or Bitcoin and Litecoin simultaneously.
 Paying more attention to http://www.dualminer.com ,  new miner will be upcoming ,higher hash force use less power.
 
@@ -106,6 +107,7 @@ source:https://github.com/dualminer/dualminer
 miner:http://www.dualminer.com/
 forum:https://bitcointalk.org/index.php?topic=409756.0
 	forum.dualminer.com
+	https://bitcointalk.org/
 website:http://www.tiannengbo.com/
 
 You can support the dualminer Team by providing a small donation:

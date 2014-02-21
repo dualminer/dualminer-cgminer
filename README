@@ -1,7 +1,8 @@
-Dualminer is ASIC  miner for both SHA-256 and Scrypt ,it is cgminer-3.5.0-based development,is lcak of a large number of test.
+Dualminer is ASIC  miner for both SHA-256 and Scrypt ,it is cgminer-3.5.0-based development,is lack of a large number of test.
 
 The first verison of dualminer source ,is under debugging, so there maybe some errors and bugs. And they will be fixed in the near future. If you encounter an error ,you can submit to us through email(dualminer@broadeng.net)
 your comments and suggestions are welcome.
+
 You can miner litecoin or bitcoin by DualMiner USB.
 The DualMiner USB is the world's first ASIC based USB miner for both SHA-256 and Scrypt.It can be setup to mine Litecoin only, or Bitcoin and Litecoin simultaneously.
 Paying more attention to http://www.dualminer.com ,  new miner will be upcoming ,higher hash force use less power.
@@ -25,7 +26,7 @@ dualminer can be build on a linux or the win32 platform,using the mingw cross co
 On a ubuntu based system this should work,may be  need to change the install dir where you wish to place.
 
 
-snstall mingw32. 
+install mingw32. 
 sudo apt-get install mingw-w64
 install libpthreads-mingw-w64
 sudo apt-get install libpthreads-mingw-w64
@@ -104,6 +105,7 @@ Resources
 source:https://github.com/dualminer/dualminer
 miner:http://www.dualminer.com/
 forum:https://bitcointalk.org/index.php?topic=409756.0
+	forum.dualminer.com
 website:http://www.tiannengbo.com/
 
 You can support the dualminer Team by providing a small donation:

@@ -1,6 +1,6 @@
-Dualminer is ASIC  miner for both SHA-256 and Scrypt ,it is cgminer-3.5.0-based development,is lack of a large number of test.
+Dualminer-cgminer is ASIC  miner for both SHA-256 and Scrypt ,it is cgminer-3.5.0-based development,is lack of a large number of test.
 
-The first verison of dualminer source ,is under debugging, so there maybe some errors and bugs. And they will be fixed in the near future. If you encounter an error ,you can submit to us through email(dualminer@broadeng.net)
+The first verison of dualminer-cgminer ,is under debugging, so there maybe some errors and bugs. And they will be fixed in the near future. If you encounter an error ,you can submit to us through email(dualminer@broadeng.net)
 your comments and suggestions are welcome.
 
 You can miner litecoin or bitcoin by DualMiner USB.
@@ -8,14 +8,14 @@ You can miner litecoin or bitcoin by DualMiner USB.
 The DualMiner USB is the world's first ASIC based USB miner for both SHA-256 and Scrypt.It can be setup to mine Litecoin only, or Bitcoin and Litecoin simultaneously.
 Paying more attention to http://www.dualminer.com ,  new miner will be upcoming ,higher hash force use less power.
 
-The following will show how to compile the dualminer source.
+The following will show how to compile the dualminer-cgminer.
 For more details,see README.cgminer.
 
 ----------------------------------------
 Install
 
 compiling for linux(ubuntu10 version or higher)
-./configure --enable-dualminer --enable-scrypt --disable-opencl --without-libudev --prefix=$DIR_PATH/
+./configure --enable-dualminer --enable-scrypt --disable-opencl  --prefix=$DIR_PATH/
 make && make install 
 may be you need to use sudo for more permissions.
 
@@ -23,7 +23,7 @@ may be you need to use sudo for more permissions.
 Cross compiling for Windows
 
 
-dualminer can be build on a linux or the win32 platform,using the mingw cross compiler collection.
+dualminer-cgminer can be build on a linux or the win32 platform,using the mingw cross compiler collection.
 On a ubuntu based system this should work,may be  need to change the install dir where you wish to place.
 
 
@@ -66,12 +66,12 @@ for x86
         make
         sudo make install 
 
-start compile dualminer in mingw-64 i686
+start compile dualminer-cgminer in mingw-64 i686
 ./configure --enable-dualminer --enable-scrypt --disable-opencl --host=i686-w64-mingw32 --without-libudev --prefix=$DIR_PATH/win64-i686/ PKG_CONFIG_PATH=/usr/i686-w64-mingw32/lib/pkgconfig CFLAGS=-I/usr/i686-w64-mingw32/include LDFLAGS=-L/usr/i686-w64-mingw32/lib
         make
         sudo make install
 
-start compile dualminer in mingw-64 x86
+start compile dualminer-cgminer in mingw-64 x86
         ./configure --enable-dualminer --enable-scrypt --disable-opencl --host=x86_64-w64-mingw32 --without-libudev --prefix=$DIR_PATH/win64-x86 PKG_CONFIG_PATH=/usr/x86_64-w64-mingw32/lib/pkgconfig CFLAGS=-I/usr/x86_64-w64-mingw32/include LDFLAGS=-L/usr/x86_64-w64-mingw32/lib
         make
         sudo make install
@@ -108,7 +108,6 @@ miner:http://www.dualminer.com/
 forum:https://bitcointalk.org/index.php?topic=409756.0
 	forum.dualminer.com
 	https://bitcointalk.org/
-website:http://www.tiannengbo.com/
 
 You can support the dualminer Team by providing a small donation:
 btc:14s7xNicZUi5KaxoeUfBinNUNMSdsKNFEi

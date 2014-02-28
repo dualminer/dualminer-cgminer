@@ -298,7 +298,7 @@ static int dualminer_set_rts_status(struct cgpu_info *dualminer, unsigned int st
 	return 0;	
 }
 
-static int dualminer_send_cmds(struct cgpu_info *dualminer, const char *cmds[], int interface)
+static void dualminer_send_cmds(struct cgpu_info *dualminer, const char *cmds[], int interface)
 {
 	int i = 0;
 	int err;

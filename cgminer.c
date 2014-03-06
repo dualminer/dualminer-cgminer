@@ -3291,6 +3291,9 @@ static void __kill_work(void)
 			continue;
 
 		cgpu->shutdown = true;
+#ifdef USE_DUALMINER
+		cgpu->drv->thread_shutdown(thr);
+#endif
 	}
 
 	sleep(1);

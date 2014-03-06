@@ -1339,7 +1339,7 @@ void usb_uninit(struct cgpu_info *cgpu)
  * N.B. this is always called inside
  *	DEVLOCK(cgpu, pstate);
  */
-static void release_cgpu(struct cgpu_info *cgpu)
+void release_cgpu(struct cgpu_info *cgpu)
 {
 	struct cg_usb_device *cgusb = cgpu->usbdev;
 	struct cgpu_info *lookcgpu;

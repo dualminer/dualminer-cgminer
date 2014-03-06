@@ -454,4 +454,6 @@ void *usb_resource_thread(void *userdata);
 #define usb_transfer_read(cgpu, typ, req, val, idx, buf, bufsiz, read, cmd) \
 	_usb_transfer_read(cgpu, typ, req, val, idx, buf, bufsiz, read, DEVTIMEOUT, cmd)
 
+extern void release_cgpu(struct cgpu_info *cgpu);
+
 #endif

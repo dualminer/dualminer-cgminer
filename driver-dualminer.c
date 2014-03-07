@@ -74,7 +74,8 @@ ASSERT1(sizeof(uint32_t) == 4);
 #define DUALMINER_READ_TIME(baud) (0.001)
 
 // USB ms timeout to wait - user specified timeouts are multiples of this
-#define DUALMINER_WAIT_TIMEOUT 100
+#define DUALMINER_WAIT_TIMEOUT 400
+#define DUALMINER_READ_TIMEOUT 100
 #define DUALMINER_CMR2_TIMEOUT 1
 
 // Defined in multiples of DUALMINER_WAIT_TIMEOUT
@@ -239,6 +240,21 @@ static void _transfer(struct cgpu_info *dualminer, uint8_t request_type, uint8_t
 
 #define transfer(dualminer, request_type, bRequest, wValue, wIndex, cmd) \
 		_transfer(dualminer, request_type, bRequest, wValue, wIndex, NULL, 0, cmd)
+
+static void release_dualminer(struct cgpu_info *dualminer, int err)
+{
+	switch(err){
+			case LIBUSB_ERROR_IO:
+			case LIBUSB_ERROR_OVERFLOW:
+			case LIBUSB_ERROR_ACCESS:
+			case LIBUSB_ERROR_BUSY:
+			case LIBUSB_ERROR_NO_MEM:
+				release_cgpu(dualminer);
+				break;
+			default:
+				break;
+		}
+}
 
 
 static int dualminer_set_dtr(struct cgpu_info *dualminer, int state)
@@ -522,6 +538,7 @@ static int dualminer_get_nonce(struct cgpu_info *dualminer, unsigned char *buf, 
 			applog(LOG_ERR, "%s%i: Comms error (rerr=%d amt=%d)",
 					dualminer->drv->name, dualminer->device_id, err, amt);
 			dev_error(dualminer, REASON_DEV_COMMS_ERROR);
+			release_dualminer(dualminer,err);
 			return DM_NONCE_ERROR;
 		}
 
@@ -551,16 +568,12 @@ static int dualminer_get_nonce(struct cgpu_info *dualminer, unsigned char *buf, 
 			first = false;
 		}
 
-		if (info->timeout < DUALMINER_WAIT_TIMEOUT) {
-			delay = DUALMINER_WAIT_TIMEOUT - rc;
-			if (delay > 0) {
-				cgsleep_ms(delay);
-
+		if (read_time > DUALMINER_WAIT_TIMEOUT && info->timeout < DUALMINER_WAIT_TIMEOUT) {
+				cgsleep_ms(DUALMINER_WAIT_TIMEOUT);
 				if (thr && thr->work_restart) {
 					applog(LOG_DEBUG, "dualminer Read: Work restart at %d ms", rc);
 					return DM_NONCE_RESTART;
 				}
-			}
 		}
 	}
 }
@@ -634,7 +647,7 @@ static bool dualminer_detect_one(struct libusb_device *dev, struct usb_find_devi
 	ident = usb_ident(dualminer);
 	switch (ident) {
 		case IDENT_DM:
-			info->timeout = DUALMINER_WAIT_TIMEOUT;
+			info->timeout = DUALMINER_READ_TIMEOUT;
 			break;
 		default:
 			quit(1, "%s dualminer_detect_one() invalid %s ident=%d",
@@ -838,7 +851,7 @@ static int64_t dualminer_scanhash(struct thr_info *thr, struct work *work,
 		applog(LOG_ERR, "%s%i: Comms error (werr=%d amt=%d)",
 				dualminer->drv->name, dualminer->device_id, err, amount);
 		dev_error(dualminer, REASON_DEV_COMMS_ERROR);
-		dualminer_initialise(dualminer, info->baud);
+		release_dualminer(dualminer,err);
 		return 0;
 	}
 

@@ -1831,9 +1831,16 @@ static void devstatus(struct io_data *io_data, __maybe_unused SOCKETTYPE c, __ma
 #ifdef HAVE_AN_FPGA
 	if (numpga > 0) {
 		for (i = 0; i < numpga; i++) {
-			pgastatus(io_data, i, isjson, isjson && devcount > 0);
+			int dev = pgadevice(i);
+			if (dev < 0) // Should never happen
+				return;
+			
+			struct cgpu_info *cgpu = get_devices(dev);
+			if(!cgpu->usbinfo.nodev){
+				pgastatus(io_data, i, isjson, isjson && devcount > 0);
 
-			devcount++;
+				devcount++;
+			}
 		}
 	}
 #endif

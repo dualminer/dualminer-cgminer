@@ -1,4 +1,10 @@
-Dualminer-cgminer is ASIC  miner for both SHA-256 and Scrypt ,it is cgminer-3.5.0-based development,is lack of a large number of test.
+Dualminer-cgminer is ASIC  miner for both SHA-256 and Scrypt ,it is cgminer-3.5.0-based development,had a large number of test on Raspberry pi and beagleboard.
+Certainly, on windows and linux such as ubuntu,it also run well.
+
+You can dualminer support websit(http://support.dualminer.com/) to know how to make your dm3/dm2/dm1 work effcicently use Dualminer-cgminer.
+Or
+ The flowing sections will tell you how to make the Dualminer-cgminer and run it. 
+
 
 The first verison of dualminer-cgminer ,is under debugging, so there maybe some errors and bugs. And they will be fixed in the near future. If you encounter an error ,you can submit to us through email(dualminer@broadeng.net)
 your comments and suggestions are welcome.

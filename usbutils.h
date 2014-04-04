@@ -150,7 +150,8 @@ enum sub_ident {
 	IDENT_CMR1,
 	IDENT_CMR2,
 	IDENT_ZTX,
-	IDENT_DM
+	IDENT_DM,
+	IDENT_CP
 };
 
 struct usb_find_devices {
@@ -387,6 +388,7 @@ void usb_set_dev_start(struct cgpu_info *cgpu);
 void usb_cleanup();
 void usb_initialise();
 void *usb_resource_thread(void *userdata);
+void release_cgpu(struct cgpu_info *cgpu);
 
 #define usb_read(cgpu, buf, bufsiz, read, cmd) \
 	_usb_read(cgpu, DEFAULT_INTINFO, DEFAULT_EP_IN, buf, bufsiz, read, DEVTIMEOUT, NULL, cmd, false)
@@ -454,6 +456,5 @@ void *usb_resource_thread(void *userdata);
 #define usb_transfer_read(cgpu, typ, req, val, idx, buf, bufsiz, read, cmd) \
 	_usb_transfer_read(cgpu, typ, req, val, idx, buf, bufsiz, read, DEVTIMEOUT, cmd)
 
-extern void release_cgpu(struct cgpu_info *cgpu);
 
 #endif

@@ -106,6 +106,7 @@ int opt_expiry = 120;
 static const bool opt_time = true;
 unsigned long long global_hashrate;
 unsigned long global_quota_gcd = 1;
+static bool app_restart_flag=false;
 
 #if defined(HAVE_OPENCL) || defined(USE_USBUTILS)
 int nDevs;
@@ -3262,6 +3263,7 @@ static void __kill_work(void)
 #ifndef USE_DUALMINER
 	if (!opt_scrypt) 
 #endif
+	if(!app_restart_flag)
 	{
 		applog(LOG_DEBUG, "Killing off HotPlug thread");
 		thr = &control_thr[hotplug_thr_id];
@@ -5083,7 +5085,7 @@ static void thread_reportout(struct thr_info *thr)
 	thr->cgpu->device_last_well = time(NULL);
 }
 
-static void hashmeter(int thr_id, struct timeval *diff,
+void hashmeter(int thr_id, struct timeval *diff,
 		      uint64_t hashes_done)
 {
 	struct timeval temp_tv_end, total_diff;
@@ -6355,6 +6357,7 @@ static void hash_sole_work(struct thr_info *mythr)
 				max_nonce = max_nonce * 0x400 / (((cycle * 1000000) + sdiff.tv_usec) / (cycle * 1000000 / 0x400));
 
 			timersub(tv_end, &tv_lastupdate, &diff);
+#ifndef USE_DUALMINER
 			/* Update the hashmeter at most 5 times per second */
 			if ((hashes_done && (diff.tv_sec > 0 || diff.tv_usec > 200000)) ||
 			    diff.tv_sec >= opt_log_interval) {
@@ -6362,7 +6365,7 @@ static void hash_sole_work(struct thr_info *mythr)
 				hashes_done = 0;
 				copy_time(&tv_lastupdate, tv_end);
 			}
-
+#endif
 			if (unlikely(mythr->work_restart)) {
 				/* Apart from device_thread 0, we stagger the
 				 * starting of every next thread to try and get
@@ -7737,6 +7740,11 @@ static void hotplug_process()
 	adjust_mostdevs();
 	switch_logsize(true);
 }
+#ifndef WIN32
+#define ThreadTotal 370
+#else
+#define ThreadTotal 2048
+#endif
 
 #define DRIVER_DRV_DETECT_HOTPLUG(X) X##_drv.drv_detect(true);
 
@@ -7763,8 +7771,13 @@ static void *hotplug_thread(void __maybe_unused *userdata)
 			 * devices */
 			DRIVER_PARSE_COMMANDS(DRIVER_DRV_DETECT_HOTPLUG)
 
-			if (new_devices)
-				hotplug_process();
+			if (new_devices){
+				if(mining_threads + new_threads>ThreadTotal){
+					app_restart_flag=true;
+					app_restart();
+				}else
+					hotplug_process();
+			}
 
 			// hotplug_time >0 && <=9999
 			cgsleep_ms(hotplug_time * 1000);
@@ -7804,10 +7817,49 @@ int main(int argc, char *argv[])
 	if (unlikely(curl_global_init(CURL_GLOBAL_ALL)))
 		quit(1, "Failed to curl_global_init");
 
-	initial_args = malloc(sizeof(char *) * (argc + 1));
-	for  (i = 0; i < argc; i++)
-		initial_args[i] = strdup(argv[i]);
-	initial_args[argc] = NULL;
+	int tmpval;
+	char strbuf[120];
+	char **args;
+	if(strstr(argv[0],"cgminer")!=NULL){
+		args = malloc(sizeof(char *) * (argc + 1));
+		initial_args = malloc(sizeof(char *) * (argc + 1));
+		for  (i = 0; i < argc; i++){
+			args[i] = strdup(argv[i]);
+			initial_args[i] = strdup(argv[i]);
+		}
+		args[argc] = NULL;
+		initial_args[argc] = NULL;
+		tmpval=argc;
+		
+	}else{
+				
+		for  (i = 1; i < argc; i++){
+			if(strstr(argv[i],"cgminer")!=NULL){
+				tmpval=i;
+				break;
+			}
+		}
+
+		args = malloc(sizeof(char *) * (argc - i + 1));
+		args[argc-i] = NULL;
+		initial_args = malloc(sizeof(char *) * (argc - i + 1));
+		initial_args[argc-i] = NULL;
+		sprintf(strbuf,"%s ",argv[0]);
+		
+		for  (j = 1; j <= i; j++){
+			sprintf(strbuf,"%s %s",strbuf,argv[j]); 	
+		}
+			
+		args[0] = strdup(strbuf);
+		initial_args[0] = strdup(strbuf);
+		i=i+1;
+		
+		for(j=1;i<argc;j++,i++){
+			args[j] = strdup(argv[i]);
+			initial_args[j] = strdup(argv[i]);
+		}
+		tmpval=j;
+	}
 
 #ifdef USE_USBUTILS
 	int err = libusb_init(NULL);
@@ -7859,7 +7911,7 @@ int main(int argc, char *argv[])
 	opt_kernel_path = alloca(PATH_MAX);
 	strcpy(opt_kernel_path, CGMINER_PREFIX);
 	cgminer_path = alloca(PATH_MAX);
-	s = strdup(argv[0]);
+	s = strdup(args[0]);
 	strcpy(cgminer_path, dirname(s));
 	free(s);
 	strcat(cgminer_path, "/");
@@ -7890,8 +7942,8 @@ int main(int argc, char *argv[])
 	opt_register_table(opt_cmdline_table,
 			   "Options for command line only");
 
-	opt_parse(&argc, argv, applog_and_exit);
-	if (argc != 1)
+	opt_parse(&tmpval, args, applog_and_exit);
+	if (tmpval != 1)
 		quit(1, "Unexpected extra commandline arguments");
 
 	if (!config_loaded)
@@ -8237,7 +8289,8 @@ begin_bench:
 		quit(1, "API thread create failed");
 
 #ifdef USE_USBUTILS
-	if (!opt_scrypt) {
+	//if (!opt_scrypt) 
+	{
 		hotplug_thr_id = 7;
 		thr = &control_thr[hotplug_thr_id];
 		if (thr_info_create(thr, NULL, hotplug_thread, thr))

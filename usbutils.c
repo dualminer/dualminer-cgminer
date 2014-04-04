@@ -46,6 +46,7 @@
 
 #ifdef WIN32
 #define RESOURCE_REPLY_NUM 2
+#define CP210X_TIMEOUT_MS 999
 #define BFLSC_TIMEOUT_MS 999
 #define BITFORCE_TIMEOUT_MS 999
 #define BITFURY_TIMEOUT_MS 999
@@ -65,8 +66,10 @@
 //
 #if defined(__arm__)
 #define DUALMINER_TIMEOUT_MS 0
+#define CP210X_TIMEOUT_MS 0
 #else
 #define DUALMINER_TIMEOUT_MS 100
+#define CP210X_TIMEOUT_MS 500
 #endif
 #endif
 
@@ -165,6 +168,19 @@ static struct usb_intinfo dm_ints[] = {
 	USB_EPS(1, dmB_epinfos)
 };
 
+static struct usb_epinfo cp2105A_epinfos[] = {
+        { LIBUSB_TRANSFER_TYPE_BULK,    64,     EPI(1), 0, 0, 0 },
+        { LIBUSB_TRANSFER_TYPE_BULK,    64,     EPO(1), 0, 0, 0 }
+};
+static struct usb_epinfo cp2105B_epinfos[] = {
+        { LIBUSB_TRANSFER_TYPE_BULK,    32,     EPI(2), 0, 0, 0 },
+        { LIBUSB_TRANSFER_TYPE_BULK,    32,     EPO(2), 0, 0, 0 }
+};
+
+static struct usb_intinfo cp2105_ints[] = {
+        USB_EPS(0, cp2105A_epinfos),
+        USB_EPS(1, cp2105B_epinfos)
+};
 #endif
 #ifdef USE_ICARUS
 static struct usb_epinfo ica_epinfos[] = {
@@ -332,6 +348,17 @@ static struct usb_find_devices find_dev[] = {
 		.timeout = DUALMINER_TIMEOUT_MS,
 		.latency = LATENCY_STD,
 		INTINFO(dm_ints) },
+ 	{
+                .drv = DRIVER_dualminer,
+                .name = "DM",
+                .ident = IDENT_CP,
+                .idVendor = 0x10c4,
+                .idProduct = 0xea70,
+                .iProduct = "CP2105 Dual USB to UART Bridge Controller",
+                .config = 1,
+                .timeout = CP210X_TIMEOUT_MS,
+                .latency = LATENCY_STD,
+                INTINFO(cp2105_ints) },
 #endif
 
 #ifdef USE_ICARUS

@@ -59,6 +59,7 @@
 #define AMU_PREF_PACKET 256
 #define BLT_PREF_PACKET 512
 #define ICA_PREF_PACKET 256
+#define CP210X_PREF_PACKET 256
 
 // Ensure the sizes are correct for the Serial read
 #if (DUALMINER_READ_SIZE != 4)
@@ -101,9 +102,10 @@ ASSERT1(sizeof(uint32_t) == 4);
 // (by a lot less than the displayed accuracy)
 // Minor inaccuracy of these numbers doesn't affect the work done,
 // only the displayed MH/s
-#define DUALMINER_REV3_HASH_TIME 0.0000000026316
-#define LANCELOT_HASH_TIME 0.0000000025000
-#define ASICMINERUSB_HASH_TIME 0.0000000029761
+//#define DUALMINER_SCRYPT_HASH_TIME		    0.00001428571429
+#define DUALMINER_SCRYPT_HASH_TIME		    0.00001728571429
+#define DUALMINER_SCRYPT_DM_HASH_TIME		0.00003333333333
+#define DUALMINER_SHA2_HASH_TIME		    0.00000000300000
 // TODO: What is it?
 #define CAIRNSMORE1_HASH_TIME 0.0000000027000
 // Per FPGA
@@ -214,8 +216,10 @@ struct DUALMINER_INFO {
 
 	// dualminer-options
 	int baud;
-	int work_division;
-	int fpga_count;
+	int asics_count;
+	bool keepwork;
+	int matrix_m;
+	int matrix_n;
 	uint32_t nonce_mask;
 
 	bool initialised;
@@ -241,20 +245,6 @@ static void _transfer(struct cgpu_info *dualminer, uint8_t request_type, uint8_t
 #define transfer(dualminer, request_type, bRequest, wValue, wIndex, cmd) \
 		_transfer(dualminer, request_type, bRequest, wValue, wIndex, NULL, 0, cmd)
 
-static void release_dualminer(struct cgpu_info *dualminer, int err)
-{
-	switch(err){
-			case LIBUSB_ERROR_IO:
-			case LIBUSB_ERROR_OVERFLOW:
-			case LIBUSB_ERROR_ACCESS:
-			case LIBUSB_ERROR_BUSY:
-			case LIBUSB_ERROR_NO_MEM:
-				release_cgpu(dualminer);
-				break;
-			default:
-				break;
-		}
-}
 
 
 static int dualminer_set_dtr(struct cgpu_info *dualminer, int state)
@@ -268,9 +258,13 @@ static int dualminer_set_dtr(struct cgpu_info *dualminer, int state)
 		usb_val = SIO_SET_DTR_LOW;
 	else
 		usb_val = SIO_SET_DTR_HIGH;
+	cg_rlock(&cgusb_fd_lock);
 	if (libusb_control_transfer(dualminer->usbdev->handle, FTDI_TYPE_OUT, SIO_SET_MODEM_CTRL_REQUEST, usb_val, 0, NULL, 0, 200) < 0)
+	{
+		cg_runlock(&cgusb_fd_lock);
 		return -1;
-
+	}
+	cg_runlock(&cgusb_fd_lock);
 	return 0;
 }
 
@@ -279,14 +273,17 @@ static int dualminer_get_cts(struct cgpu_info *dualminer)
 {
 	char usb_val[2];
 	unsigned short status;
-	if(dualminer->usbdev->handle == NULL)
+	if(dualminer->usbdev == NULL)
 	{
 		return -1;
 	}
+	cg_rlock(&cgusb_fd_lock);
 	if (libusb_control_transfer(dualminer->usbdev->handle, FTDI_TYPE_IN, SIO_POLL_MODEM_STATUS_REQUEST, 0, 1, (unsigned char *)usb_val, 2, 200) != 2)
 	{
+		cg_runlock(&cgusb_fd_lock);
 		return -1;
 	}
+	cg_runlock(&cgusb_fd_lock);
 	status = (usb_val[1] << 8) | (usb_val[0] & 0xFF);
 	return ((status & 0x10) ? 0 : 1); 
 }
@@ -294,7 +291,7 @@ static int dualminer_get_cts(struct cgpu_info *dualminer)
 static int dualminer_set_rts_status(struct cgpu_info *dualminer, unsigned int state)
 {
 	unsigned short usb_val;
-	if(dualminer->usbdev->handle == NULL)
+	if(dualminer->usbdev == NULL)
 	{
 		return -1;
 	}
@@ -306,11 +303,13 @@ static int dualminer_set_rts_status(struct cgpu_info *dualminer, unsigned int st
 	{
 		usb_val = SIO_SET_RTS_LOW;
 	}
-
+	cg_rlock(&cgusb_fd_lock);
 	if (libusb_control_transfer(dualminer->usbdev->handle, FTDI_TYPE_OUT, SIO_SET_MODEM_CTRL_REQUEST, usb_val, 2, NULL, 0, 200) < 0)
 	{
+		cg_runlock(&cgusb_fd_lock);
 		return -1;
 	}
+	cg_runlock(&cgusb_fd_lock);
 	return 0;	
 }
 
@@ -420,6 +419,7 @@ static void dualminer_initialise(struct cgpu_info *dualminer, int baud)
 	uint16_t wValue, wIndex;
 	enum sub_ident ident;
 	int interface;
+	unsigned int data;
 
 	if (dualminer->usbinfo.nodev)
 		return;
@@ -468,7 +468,9 @@ static void dualminer_initialise(struct cgpu_info *dualminer, int baud)
 			dualminer_send_cmds(dualminer, ltc_init, FTDI_INTERFACE_B);
 			}
 			else
+			{
 			dualminer_send_cmds(dualminer,ltc_only_init,FTDI_INTERFACE_A);
+			}
 			if(opt_dualminer_pll != 0)
 			{
 				dualminer_set_pll_freq(dualminer, opt_dualminer_pll);
@@ -490,6 +492,38 @@ static void dualminer_initialise(struct cgpu_info *dualminer, int baud)
 			if(!opt_dualminer_interface)
 			dualminer_send_cmds(dualminer, btc_open_nonce_unit, FTDI_INTERFACE_A);
 			break;
+		case IDENT_CP:
+                        usb_set_pps(dualminer, CP210X_PREF_PACKET); //
+			//enable uart
+                        transfer(dualminer, CP210X_TYPE_OUT, CP210X_REQUEST_IFC_ENABLE, CP210X_VALUE_UART_ENABLE,FTDI_INTERFACE_A, C_ENABLE_UART);
+                        if (dualminer->usbinfo.nodev)
+                                return;
+                        // Set data control
+                        transfer(dualminer, CP210X_TYPE_OUT, CP210X_REQUEST_DATA, CP210X_VALUE_DATA,FTDI_INTERFACE_A, C_SETDATA);
+                        if (dualminer->usbinfo.nodev)
+                                return;
+			//set baud
+                        data = CP210X_DATA_BAUD;
+			_transfer(dualminer, CP210X_TYPE_OUT, CP210X_REQUEST_BAUD, 0,0, &data, sizeof(data), C_SETBAUD);
+			
+			if(!opt_dualminer_interface)
+			{
+				
+                                _transfer(dualminer, CP210X_TYPE_OUT, CP210X_REQUEST_BAUD, 0,1, &data, sizeof(data), C_SETBAUD);
+				dualminer_send_cmds(dualminer, btc_gating, FTDI_INTERFACE_A);
+				dualminer_send_cmds(dualminer, btc_init, FTDI_INTERFACE_A);
+				dualminer_send_cmds(dualminer, ltc_init, FTDI_INTERFACE_B);
+			}
+			else
+			{
+				dualminer_send_cmds(dualminer,ltc_only_init,FTDI_INTERFACE_A);
+			}
+				
+			if(!opt_dualminer_interface)
+			dualminer_send_cmds(dualminer, btc_open_nonce_unit, FTDI_INTERFACE_A);
+			
+			dualminer_send_cmds(dualminer, pll_freq_850M_cmd, FTDI_INTERFACE_A);
+			break;
 		default:
 			quit(1, "dualminer_intialise() called with invalid %s cgid %i ident=%d",
 				dualminer->drv->name, dualminer->cgminer_id, ident);
@@ -509,12 +543,31 @@ static void rev(unsigned char *s, size_t l)
 	}
 }
 
+static void release_dualminer(struct cgpu_info *dualminer, int err)
+{
+	switch(err)
+	{
+		case LIBUSB_ERROR_IO:
+		case LIBUSB_ERROR_OVERFLOW:
+		case LIBUSB_ERROR_ACCESS:
+		case LIBUSB_ERROR_BUSY:
+		case LIBUSB_ERROR_NO_MEM:
+		case LIBUSB_ERROR_TIMEOUT:
+			dualminer_set_dtr(dualminer, 0);
+			dualminer_set_rts_status(dualminer, RTS_LOW);
+			cgsleep_ms(500);
+			release_cgpu(dualminer);
+			break;
+		default:
+			break;
+	}
+}
 #define DM_NONCE_ERROR -1
 #define DM_NONCE_OK 0
 #define DM_NONCE_RESTART 1
 #define DM_NONCE_TIMEOUT 2
 
-static int dualminer_get_nonce(struct cgpu_info *dualminer, unsigned char *buf, struct timeval *tv_start, struct timeval *tv_finish, struct thr_info *thr, int read_time)
+static int dualminer_get_nonce(struct cgpu_info *dualminer, unsigned char *buf, struct timeval *tv_start, struct timeval *tv_finish, struct thr_info *thr, int read_time, bool is_ltc)
 {
 	struct DUALMINER_INFO *info = (struct DUALMINER_INFO *)(dualminer->device_data);
 	struct timeval read_start, read_finish;
@@ -531,7 +584,7 @@ static int dualminer_get_nonce(struct cgpu_info *dualminer, unsigned char *buf, 
 
 		cgtime(&read_start);
 
-		err = usb_read_ii_once_timeout(dualminer, (opt_dualminer_interface?0:(opt_scrypt ? 1 : 0)), (char *)buf,
+		err = usb_read_ii_once_timeout(dualminer, (opt_dualminer_interface ? 0 : (is_ltc ? 1 : 0)), (char *)buf,
 					      DUALMINER_READ_SIZE, &amt, info->timeout, C_GETRESULTS);
 		cgtime(&read_finish);
 		if (err < 0 && err != LIBUSB_ERROR_TIMEOUT) {
@@ -578,6 +631,28 @@ static int dualminer_get_nonce(struct cgpu_info *dualminer, unsigned char *buf, 
 	}
 }
 
+static int dualminer_write(struct cgpu_info *dualminer, char *buf, int size, bool is_ltc)
+{
+	int err, amount;
+	err = usb_write_ii(dualminer, (opt_dualminer_interface ? 0 : (is_ltc ? 1 : 0)), buf, size, &amount, C_SENDWORK);
+	if(err != LIBUSB_SUCCESS || amount != size)
+	{
+		applog(LOG_ERR, "%s%i: Comms error (werr=%d amt=%d)", dualminer->drv->name, dualminer->device_id, err, amount);
+		dev_error(dualminer, REASON_DEV_COMMS_ERROR);
+//		libusb_reset_device(dualminer->usbdev->handle);
+		dualminer->cgpu_err_accumulation++;
+		if(dualminer->cgpu_err_accumulation>5)
+			release_dualminer(dualminer, err);
+		return 0;
+	}
+	if (opt_debug) 
+	{
+		applog(LOG_ERR, "\033[1;32m %s%i: Write to USB %s \033[0m", dualminer->drv->name, dualminer->device_id, bin2hex(buf, amount));
+	}
+	dualminer->cgpu_err_accumulation=0;
+	return amount;
+}
+
 static const char *timing_mode_str(enum timing_mode timing_mode)
 {
 	switch(timing_mode) {
@@ -604,10 +679,7 @@ static uint32_t mask(int work_division)
 	case 1:
 		nonce_mask = 0xffffffff;
 		break;
-	case 2:
-		nonce_mask = 0x7fffffff;
-		break;
-	case 4:
+	case 5:
 		nonce_mask = 0x3fffffff;
 		break;
 	case 8:
@@ -619,17 +691,104 @@ static uint32_t mask(int work_division)
 	return nonce_mask;
 }
 
+static int dualminer_set_noce_range(struct cgpu_info *dualminer, bool is_ltc, int m, int n)
+{
+	int i, j;
+	uint32_t nonce, step;
+	unsigned char bin[12];
+	char *p;
+	if(!is_ltc)
+	{
+		step = 0xffffffff / n;
+		for(i = 0; i < n; i++)
+		{
+			p = calloc(8, 1);
+			if (unlikely(!p))
+			{
+				return -1;
+			}
+			memcpy(p, "\x55\xaa\x00\x00", 4);
+			p[2] = i;
+			nonce = htole32(step * i);
+			memcpy(p + 4, &nonce, sizeof(nonce));
+			applog(LOG_ERR, "\033[1;34m %s\033[0m", bin2hex(p, 8));
+			dualminer_write(dualminer, p, 8, false);
+			usleep(10*1000);
+		}
+	}
+	else
+	{
+		for(j = 0; j < m; j++)
+		{
+			for(i = 0; i < n; i++)
+			{
+				memcpy(bin, "\x55\xaa\x10\x23\x00\x00\x00\x00\xff\xff\xff\x0f", 12);
+				bin[2] = bin[2] + i;
+				bin[7] = bin[7] + ((2*i)<<4);//(0x100 / (m * n))*(j * n + i);//0x00 + ((2*i)<<4);
+				bin[11] = bin[11] + ((2*i+1)<<4);//(0x100 / (m * n)) * (j * n + i + 1) - 1; ////0x0f + ((2*i+1)<<4);
+				dualminer_write(dualminer, (char *)bin, 12, true);
+				usleep(2 * 1000);
+			}
+		}
+	}
+}
+
+static int dualminer_detect_asics(struct cgpu_info *dualminer, bool is_ltc)
+{
+	int ok_count = 0;
+	int i, amount, err, ret;
+	char *nonce_hex;
+	char *temp;
+	unsigned char nonce_bin[DUALMINER_READ_SIZE];
+	unsigned char ob_bin[160];
+	struct timeval tv_start, tv_finish;
+	for(i = 0; i < 0xf; i++)
+	{
+		if(is_ltc)
+		{
+			ltc_golden[5] = (i > 9 ? (0x61 + i - 10): (0x30 + i));
+		}
+		else
+		{
+			btc_golden[5] = (i > 9 ? (0x61 + i - 10) : (0x30 + i));
+		}
+		hex2bin(ob_bin, (is_ltc ? ltc_golden : btc_golden), sizeof(ob_bin));
+		if(!dualminer_write(dualminer, ob_bin, (is_ltc ? 152 : 52), is_ltc))
+		{
+			continue;	
+		}
+		memset(nonce_bin, 0, sizeof(nonce_bin));
+		usleep(1000);
+		ret = dualminer_get_nonce(dualminer, nonce_bin, &tv_start, &tv_finish, NULL, 100, is_ltc);
+		if (ret != DM_NONCE_OK)
+			continue;
+		rev(nonce_bin, 4);
+	
+		nonce_hex = bin2hex(nonce_bin, sizeof(nonce_bin));
+		if (strncmp(nonce_hex, (is_ltc ? ltc_golden_nonce : btc_golden_nonce), 8) == 0)
+		{
+			ok_count++;
+			applog(LOG_ERR, "\033[1;32mdualminer Detect %s: Test Success at %s: get %s, should: %s\033[0m", (is_ltc ? "LTC" : "BTC"), dualminer->device_path, nonce_hex, (is_ltc ? ltc_golden_nonce : btc_golden_nonce));
+		}
+		else
+		{
+			applog(LOG_ERR, "\033[1;31mDualMiner Detect %s: Test failed at %s: get %s, should: %s\033[0m", (is_ltc ? "LTC" : "BTC"), dualminer->device_path, nonce_hex,  (is_ltc ? ltc_golden_nonce : btc_golden_nonce));
+		}
+		free(nonce_hex);
+		usleep(1000);
+	}
+	return ok_count;
+}
+
 static bool dualminer_detect_one(struct libusb_device *dev, struct usb_find_devices *found)
 {
 	int this_option_offset = ++option_offset;
 	struct DUALMINER_INFO *info;
 	struct timeval tv_start, tv_finish;
 
-	unsigned char ob_bin[64], nonce_bin[DUALMINER_READ_SIZE], scrypt_bin[160];
-	char *nonce_hex;
-	int baud, uninitialised_var(work_division), uninitialised_var(fpga_count);
+	int asics_count;
+	int baud, tries;
 	struct cgpu_info *dualminer;
-	int ret, err, amount, tries;
 	enum sub_ident ident;
 	bool ok;
 	baud = DUALMINER_IO_SPEED;
@@ -639,7 +798,6 @@ static bool dualminer_detect_one(struct libusb_device *dev, struct usb_find_devi
 		goto shin;
 	usb_buffer_enable(dualminer);
 	
-	opt_scrypt ? hex2bin(scrypt_bin, ltc_golden, sizeof(scrypt_bin)) : hex2bin(ob_bin, btc_golden, sizeof(ob_bin));
 	info = (struct DUALMINER_INFO *)calloc(1, sizeof(struct DUALMINER_INFO));
 	if (unlikely(!info))
 		quit(1, "Failed to malloc DUALMINER_INFO");
@@ -647,7 +805,9 @@ static bool dualminer_detect_one(struct libusb_device *dev, struct usb_find_devi
 	ident = usb_ident(dualminer);
 	switch (ident) {
 		case IDENT_DM:
+		case IDENT_CP:
 			info->timeout = DUALMINER_READ_TIMEOUT;
+			info->keepwork = false;
 			break;
 		default:
 			quit(1, "%s dualminer_detect_one() invalid %s ident=%d",
@@ -655,37 +815,20 @@ static bool dualminer_detect_one(struct libusb_device *dev, struct usb_find_devi
 	}
 
 	dualminer_initialise(dualminer, baud);
-
+	dualminer->cgpu_err_accumulation=0;
 	tries = 1;
 	ok = false;
 	while (!ok && tries-- > 0) 
 	{
-		err = usb_write_ii(dualminer, (opt_dualminer_interface? 0:(opt_scrypt ? 1 : 0)), (char *)(opt_scrypt ? scrypt_bin : ob_bin),
-			(opt_scrypt ? sizeof(scrypt_bin) : sizeof(ob_bin)), &amount, C_SENDWORK);
-
-		if (err != LIBUSB_SUCCESS || amount != (opt_scrypt ? sizeof(scrypt_bin) : sizeof(ob_bin)))
-		{
-			continue;
-		}
-		memset(nonce_bin, 0, sizeof(nonce_bin));
-		ret = dualminer_get_nonce(dualminer, nonce_bin, &tv_start, &tv_finish, NULL, 100);
-		if (ret != DM_NONCE_OK)
-			continue;
-		rev(nonce_bin, 4);
-
-		nonce_hex = bin2hex(nonce_bin, sizeof(nonce_bin));
-		if (strncmp(nonce_hex, (opt_scrypt ? ltc_golden_nonce : btc_golden_nonce), 8) == 0)
+		asics_count = dualminer_detect_asics(dualminer, (opt_scrypt ? true : false));
+		if(asics_count >= 1)
 		{
 			ok = true;
-			applog(LOG_NOTICE, "\033[1;32mdualminer Detect: Test Success at %s: get %s, should: %s\033[0m", 
-				dualminer->device_path, nonce_hex, (opt_scrypt ? ltc_golden_nonce : btc_golden_nonce));
+			if(asics_count == 8 || asics_count == 5 || asics_count == 1)
+			{
+				info->keepwork = true;
+			}
 		}
-		else 
-		{
-			applog(LOG_ERR, "DualMiner Detect: Test failed at %s: get %s, should: %s",
-				dualminer->device_path, nonce_hex, (opt_scrypt ? ltc_golden_nonce : btc_golden_nonce));
-		}
-		free(nonce_hex);
 	}
 
 	if (!ok) 
@@ -718,10 +861,7 @@ static bool dualminer_detect_one(struct libusb_device *dev, struct usb_find_devi
 		dualminer_set_rts_status(dualminer, RTS_HIGH);
 	}
 
-	applog(LOG_DEBUG,
-		"dualminer Detect: "
-		"Test succeeded at %s: got %s",
-			dualminer->device_path, btc_golden_nonce);
+	applog(LOG_DEBUG,"dualminer Detect: Test succeeded at %s: got %s", dualminer->device_path, btc_golden_nonce);
 
 	/* We have a real dualminer! */
 	if (!add_cgpu(dualminer))
@@ -732,14 +872,14 @@ static bool dualminer_detect_one(struct libusb_device *dev, struct usb_find_devi
 	applog(LOG_INFO, "%s%d: Found at %s",
 		dualminer->drv->name, dualminer->device_id, dualminer->device_path);
 
-	applog(LOG_DEBUG, "%s%d: Init baud=%d work_division=%d fpga_count=%d",
-		dualminer->drv->name, dualminer->device_id, baud, work_division, fpga_count);
+	applog(LOG_DEBUG, "%s%d: Init baud=%d asics_count=%d",
+	dualminer->drv->name, dualminer->device_id, baud, asics_count);
 
 	info->baud = baud;
-	info->work_division = work_division;
-	info->fpga_count = fpga_count;
-	info->nonce_mask = mask(2);
-	info->golden_hashes = (btc_golden_nonce_val & info->nonce_mask) * 2;
+	info->asics_count = asics_count;
+	info->nonce_mask = mask(asics_count);
+	info->matrix_n = asics_count;
+	info->matrix_m = 1;
 	timersub(&tv_finish, &tv_start, &(info->golden_tv));
 
 	if(opt_scrypt) info->golden_hashes = (double)((50000) * (double)opt_pll_freq) / 600;
@@ -772,18 +912,77 @@ static bool dualminer_prepare(__maybe_unused struct thr_info *thr)
 	return true;
 }
 
+static int dualmine_send_task(struct cgpu_info *dualminer, struct work *work, bool is_ltc)
+{
+	struct DUALMINER_INFO *info;
+	unsigned char ob_bin[64], btc_bin[52], ltc_bin[160];
+	info = (struct DUALMINER_INFO *)dualminer->device_data;
+	if(is_ltc)
+	{
+		if(!opt_dualminer_interface)
+		{
+        	dualminer_send_cmds(dualminer, ltc_init, 1);
+		}
+		else
+		{
+			dualminer_send_cmds(dualminer, ltc_restart, 0);
+			usleep(10 * 1000);
+		}
+		if(info->matrix_n == 1)
+		{
+			memset(ltc_bin, 0, sizeof(ltc_bin));
+			memcpy(ltc_bin, "\x55\xaa\x1f\x00", 4);
+			memcpy(ltc_bin + 4, work->target, 32);
+			memcpy(ltc_bin + 36, work->midstate, 32);
+			memcpy(ltc_bin + 68, work->data, 80);
+			memcpy(ltc_bin + 148, "\xff\xff\xff\xff", 4);
+			dualminer_write(dualminer, (char *)(ltc_bin), 152, true);
+			usleep(10 * 1000);
+		}
+		else if(info->matrix_n > 1)
+		{
+			memset(ltc_bin, 0, sizeof(ltc_bin));
+			memcpy(ltc_bin, "\x55\xaa\x1f\x00", 4);
+			memcpy(ltc_bin + 4, work->target, 32);
+			memcpy(ltc_bin + 36, work->midstate, 32);
+			dualminer_write(dualminer, (char *)(ltc_bin), 152 - 8 - 76, true);   	
+			usleep(10 * 1000);
+			memset(ltc_bin, 0, sizeof(ltc_bin));
+			memcpy(ltc_bin, "\x55\xaa\x1f\x10", 4);
+			memcpy(ltc_bin + 4, work->data, 76);
+			dualminer_write(dualminer, (char *)(ltc_bin), 152 - 8 - 64, true);
+			usleep(10 * 1000);
+			dualminer_set_noce_range(dualminer, true, info->matrix_m, info->matrix_n);
+		}
+		else
+		{
+		}
+	}
+	else
+	{
+		memset(ob_bin, 0, sizeof(ob_bin));
+		memcpy(ob_bin, work->midstate, 32);
+		memcpy(ob_bin + 52, work->data + 64, 12);
+		memset(btc_bin, 0, sizeof(btc_bin));
+		memcpy(btc_bin, "\x55\xaa\x1f\x00", 4);
+		memcpy(btc_bin + 8, ob_bin, 32);
+		memcpy(btc_bin + 40, ob_bin + 52, 12);
+	}
+}
 static int64_t dualminer_scanhash(struct thr_info *thr, struct work *work,
 				__maybe_unused int64_t max_nonce)
 {
 	struct cgpu_info *dualminer = thr->cgpu;
 	struct DUALMINER_INFO *info = (struct DUALMINER_INFO *)(dualminer->device_data);
 	int ret, err, amount;
-	unsigned char ob_bin[64], nonce_bin[DUALMINER_READ_SIZE], btc_bin[52], scrypt_bin[160];
+	unsigned char nonce_bin[DUALMINER_READ_SIZE];
 	char *ob_hex;
 	uint32_t nonce;
-	int64_t hash_count;
+	int64_t hash_count, hash_count_done = 0;
 	struct timeval tv_start, tv_finish, elapsed;
 	struct timeval tv_history_start, tv_history_finish;
+	struct timeval loop_start, loop_finish, loop_elapsed;
+	struct timeval diff, diff_start, diff_finish;
 	double Ti, Xi;
 	int curr_hw_errors, i;
 	bool was_hw_error;
@@ -796,9 +995,8 @@ static int64_t dualminer_scanhash(struct thr_info *thr, struct work *work,
 	int64_t estimate_hashes;
 	uint32_t values;
 	int64_t hash_count_range;
-
-	usleep(DEFAULT_DELAY_TIME);
-
+	
+//	info->matrix_m = total_devices;	
 	// Device is gone
 	if (dualminer->usbinfo.nodev)
 		return -1;
@@ -807,237 +1005,87 @@ static int64_t dualminer_scanhash(struct thr_info *thr, struct work *work,
 		dualminer_initialise(dualminer, info->baud);
 
 	elapsed.tv_sec = elapsed.tv_usec = 0;
-
-	if(!opt_scrypt)
-	{
-		memset(ob_bin, 0, sizeof(ob_bin));
-		memcpy(ob_bin, work->midstate, 32);
-		memcpy(ob_bin + 52, work->data + 64, 12);
-
-		memset(btc_bin, 0, sizeof(btc_bin));
-		btc_bin[0] = 0x55;
-		btc_bin[1] = 0xaa;
-		btc_bin[2] = 0x0f;
-		btc_bin[3] = 0x00;
-		memcpy(btc_bin + 8, ob_bin, 32);
-		memcpy(btc_bin + 40, ob_bin + 52, 12);	
-	}
-	else
-	{
-		if(!opt_dualminer_interface)
-		dualminer_send_cmds(dualminer, ltc_init, 1);
-		else
-		dualminer_send_cmds(dualminer, ltc_restart, 0);
-		memset(scrypt_bin, 0, sizeof(scrypt_bin));
-		scrypt_bin[0] = 0x55;
-		scrypt_bin[1] = 0xaa;
-		scrypt_bin[2] = 0x1f;
-		scrypt_bin[3] = 0x00;
-		memcpy(scrypt_bin + 4, work->target, 32);
-		memcpy(scrypt_bin + 36, work->midstate, 32);
-		memcpy(scrypt_bin + 68, work->data, 80);		
-		scrypt_bin[148] = 0xff;
-		scrypt_bin[149] = 0xff;
-		scrypt_bin[150] = 0xff;
-		scrypt_bin[151] = 0xff;
-	}
-
-	// We only want results for the work we are about to send
-	usb_buffer_clear(dualminer);
-	//add by wangzhaofeng
-	err = usb_write_ii(dualminer, (opt_dualminer_interface?0:(opt_scrypt ? 1 : 0)), (char *)(opt_scrypt ? scrypt_bin : btc_bin), 
-		(opt_scrypt ? sizeof(scrypt_bin) : sizeof(btc_bin)), &amount, C_SENDWORK);
-	if (err < 0 || amount != (opt_scrypt ? sizeof(scrypt_bin) : sizeof(btc_bin))) {
-		applog(LOG_ERR, "%s%i: Comms error (werr=%d amt=%d)",
-				dualminer->drv->name, dualminer->device_id, err, amount);
-		dev_error(dualminer, REASON_DEV_COMMS_ERROR);
-		release_dualminer(dualminer,err);
-		return 0;
-	}
-
-	if (opt_debug) {
-		ob_hex = bin2hex((void *)(opt_scrypt ? scrypt_bin : btc_bin), (opt_scrypt ? sizeof(scrypt_bin) : sizeof(btc_bin)));
-		applog(LOG_DEBUG, "%s%d: sent %s", dualminer->drv->name, dualminer->device_id, ob_hex);
-		free(ob_hex);
-	}
-
+	dualmine_send_task(dualminer, work, opt_scrypt);
 	/* dualminer will return 4 bytes (DUALMINER_READ_SIZE) nonces or nothing */
-	memset(nonce_bin, 0, sizeof(nonce_bin));
-	ret = dualminer_get_nonce(dualminer, nonce_bin, &tv_start, &tv_finish, thr, (opt_scrypt ? 11152 * 3 : 11152));
-	if (ret == DM_NONCE_ERROR)
-		return 0;
-	rev(nonce_bin, 4);
-	work->blk.nonce = 0xffffffff;
+	if (opt_debug)
+	{
+		applog(LOG_ERR, "\033[1;36m ==> %s%d: loop_elapsed.tv_sec = %d, thr = %x, !thr->work_restart = %x, info->keepwork = %x  <==\033[0m",
+        		dualminer->drv->name, dualminer->device_id, loop_elapsed.tv_sec, thr, !thr->work_restart, info->keepwork);
+	}
+	cgtime(&loop_start);
+	cgtime(&diff_start);
+	do
+	{
+	/* dualminer will return 4 bytes (DUALMINER_READ_SIZE) nonces or nothing */
+		memset(nonce_bin, 0, sizeof(nonce_bin));
+		ret = dualminer_get_nonce(dualminer, nonce_bin, &tv_start, &tv_finish, thr, (opt_scrypt ? 5000: 1600), opt_scrypt);
+		if (ret == DM_NONCE_ERROR)
+			return 0;
+		rev(nonce_bin, 4);
+		work->blk.nonce = 0xffffffff;
 
-	timersub(&tv_finish, &tv_start, &elapsed);
+		timersub(&tv_finish, &tv_start, &elapsed);
 
-	// aborted before becoming idle, get new work
-	if (ret == DM_NONCE_TIMEOUT || ret == DM_NONCE_RESTART) {
+		// aborted before becoming idle, get new work
+		if (ret == DM_NONCE_TIMEOUT || ret == DM_NONCE_RESTART) {
 		
-		// ONLY up to just when it aborted
-		// We didn't read a reply so we don't subtract DUALMINER_READ_TIME
-		estimate_hashes = ((double)(elapsed.tv_sec) + ((double)(elapsed.tv_usec))/((double)1000000))*info->golden_hashes;
+			// ONLY up to just when it aborted
+			// We didn't read a reply so we don't subtract DUALMINER_READ_TIME
+			estimate_hashes = ((double)(elapsed.tv_sec) + ((double)(elapsed.tv_usec)) / ((double)1000000)) / DUALMINER_SCRYPT_HASH_TIME; 
+			// If some Serial-USB delay allowed the full nonce range to
+			// complete it can't have done more than a full nonce
+			if (unlikely(estimate_hashes > 0xffffffff))
+				estimate_hashes = 0xffffffff;
 
-		// If some Serial-USB delay allowed the full nonce range to
-		// complete it can't have done more than a full nonce
-		if (unlikely(estimate_hashes > 0xffffffff))
-			estimate_hashes = 0xffffffff;
-
-		applog(LOG_DEBUG, "%s%d: no nonce = 0x%08lX hashes (%ld.%06lds)",
+			applog(LOG_DEBUG, "%s%d: no nonce = 0x%08lX hashes (%ld.%06lds)",
 				dualminer->drv->name, dualminer->device_id,
 				(long unsigned int)estimate_hashes,
 				elapsed.tv_sec, elapsed.tv_usec);
+			hash_count_done += estimate_hashes;
+			goto oversubmit;
+		}
 
-		return estimate_hashes;
-	}
-
-	memcpy((char *)&nonce, nonce_bin, sizeof(nonce_bin));
-	nonce = htobe32(nonce);
-	curr_hw_errors = dualminer->hw_errors;
-	submit_nonce(thr, work, nonce);
-	was_hw_error = (curr_hw_errors < dualminer->hw_errors);
-	if (!was_hw_error)
-	{
-		//do_dualminer_close(thr);
-		hash_count = opt_scrypt ? nonce:((double)(((double)nonce)*opt_btc_number)/160);
-		info->golden_hashes=(double)hash_count/((double)(elapsed.tv_sec) + ((double)(elapsed.tv_usec))/((double)1000000));	
-		applog(LOG_DEBUG, "dualminer hashcount = %d, hashrate=%d, opt_btc_number=%d", hash_count, info->golden_hashes, opt_btc_number);
-		
-	}
-	else
-	{
-		hash_count = ((double)(elapsed.tv_sec) + ((double)(elapsed.tv_usec))/((double)1000000))*info->golden_hashes;
-	}
-
-#if 0
-	// This appears to only return zero nonce values
-	if (usb_buffer_size(dualminer) > 3) {
-		memcpy((char *)&nonce, dualminer->usbdev->buffer, sizeof(nonce_bin));
+		memcpy((char *)&nonce, nonce_bin, sizeof(nonce_bin));
 		nonce = htobe32(nonce);
-		applog(LOG_WARNING, "%s%d: attempting to submit 2nd nonce = 0x%08lX",
-				dualminer->drv->name, dualminer->device_id,
-				(long unsigned int)nonce);
 		curr_hw_errors = dualminer->hw_errors;
 		submit_nonce(thr, work, nonce);
-		was_hw_error = (curr_hw_errors > dualminer->hw_errors);
-	}
-#endif
-
-	if (opt_debug || info->do_dualminer_timing)
-		timersub(&tv_finish, &tv_start, &elapsed);
-
-	applog(LOG_DEBUG, "%s%d: nonce = 0x%08x = 0x%08lX hashes (%ld.%06lds)",
-			dualminer->drv->name, dualminer->device_id,
-			nonce, (long unsigned int)hash_count,
-			elapsed.tv_sec, elapsed.tv_usec);
-
-	// Ignore possible end condition values ... and hw errors
-	// TODO: set limitations on calculated values depending on the device
-	// to avoid crap values caused by CPU/Task Switching/Swapping/etc
-	if (info->do_dualminer_timing
-	&&  !was_hw_error
-	&&  ((nonce & info->nonce_mask) > END_CONDITION)
-	&&  ((nonce & info->nonce_mask) < (info->nonce_mask & ~END_CONDITION))) {
-		cgtime(&tv_history_start);
-
-		history0 = &(info->history[0]);
-
-		if (history0->values == 0)
-			timeradd(&tv_start, &history_sec, &(history0->finish));
-
-		Ti = (double)(elapsed.tv_sec)
-			+ ((double)(elapsed.tv_usec))/((double)1000000)
-			- ((double)DUALMINER_READ_TIME(info->baud));
-		Xi = (double)hash_count;
-		history0->sumXiTi += Xi * Ti;
-		history0->sumXi += Xi;
-		history0->sumTi += Ti;
-		history0->sumXi2 += Xi * Xi;
-
-		history0->values++;
-
-		if (history0->hash_count_max < hash_count)
-			history0->hash_count_max = hash_count;
-		if (history0->hash_count_min > hash_count || history0->hash_count_min == 0)
-			history0->hash_count_min = hash_count;
-
-		if (history0->values >= info->min_data_count
-		&&  timercmp(&tv_start, &(history0->finish), >)) {
-			for (i = INFO_HISTORY; i > 0; i--)
-				memcpy(&(info->history[i]),
-					&(info->history[i-1]),
-					sizeof(struct DUALMINER_HISTORY));
-
-			// Initialise history0 to zero for summary calculation
-			memset(history0, 0, sizeof(struct DUALMINER_HISTORY));
-
-			// We just completed a history data set
-			// So now recalc read_time based on the whole history thus we will
-			// initially get more accurate until it completes INFO_HISTORY
-			// total data sets
-			count = 0;
-			for (i = 1 ; i <= INFO_HISTORY; i++) {
-				history = &(info->history[i]);
-				if (history->values >= MIN_DATA_COUNT) {
-					count++;
-
-					history0->sumXiTi += history->sumXiTi;
-					history0->sumXi += history->sumXi;
-					history0->sumTi += history->sumTi;
-					history0->sumXi2 += history->sumXi2;
-					history0->values += history->values;
-
-					if (history0->hash_count_max < history->hash_count_max)
-						history0->hash_count_max = history->hash_count_max;
-					if (history0->hash_count_min > history->hash_count_min || history0->hash_count_min == 0)
-						history0->hash_count_min = history->hash_count_min;
-				}
-			}
-
-			// All history data
-			Hs = (history0->values*history0->sumXiTi - history0->sumXi*history0->sumTi)
-				/ (history0->values*history0->sumXi2 - history0->sumXi*history0->sumXi);
-			W = history0->sumTi/history0->values - Hs*history0->sumXi/history0->values;
-			hash_count_range = history0->hash_count_max - history0->hash_count_min;
-			values = history0->values;
-			
-			// Initialise history0 to zero for next data set
-			memset(history0, 0, sizeof(struct DUALMINER_HISTORY));
-
-			fullnonce = W + Hs * (((double)0xffffffff) + 1);
-			read_time = SECTOMS(fullnonce) - DUALMINER_READ_REDUCE;
-			if (info->read_time_limit > 0 && read_time > info->read_time_limit) {
-				read_time = info->read_time_limit;
-				limited = true;
-			} else
-				limited = false;
-
-			info->Hs = Hs;
-			info->read_time = read_time;
-
-			info->fullnonce = fullnonce;
-			info->count = count;
-			info->W = W;
-			info->values = values;
-			info->hash_count_range = hash_count_range;
-
-			if (info->min_data_count < MAX_MIN_DATA_COUNT)
-				info->min_data_count *= 2;
-			else if (info->timing_mode == MODE_SHORT)
-				info->do_dualminer_timing = false;
-
-			applog(LOG_WARNING, "%s%d Re-estimate: Hs=%e W=%e read_time=%dms%s fullnonce=%.3fs",
-					dualminer->drv->name, dualminer->device_id, Hs, W, read_time,
-					limited ? " (limited)" : "", fullnonce);
+		was_hw_error = (curr_hw_errors < dualminer->hw_errors);
+		if (!was_hw_error)
+		{
+			//do_dualminer_close(thr);
+			hash_count = opt_scrypt ? nonce & info->nonce_mask : ((double)(((double)nonce)*opt_btc_number)/160);
+//			info->golden_hashes=(double)hash_count/((double)(elapsed.tv_sec) + ((double)(elapsed.tv_usec))/((double)1000000));	
+			applog(LOG_DEBUG, "dualminer hashcount = %d, hashrate=%d, opt_btc_number=%d", hash_count, info->golden_hashes, opt_btc_number);
+		
 		}
-		info->history_count++;
-		cgtime(&tv_history_finish);
+		else
+		{
+			hash_count = ((double)(elapsed.tv_sec) + ((double)(elapsed.tv_usec))/((double)1000000)) / DUALMINER_SCRYPT_HASH_TIME;
+		}
+		hash_count *= info->asics_count;
+		hash_count_done += hash_count;
+oversubmit:
+		cgtime(&diff_finish);
+		timersub(&diff_finish, &diff_start, &diff);
+		if ((hash_count && (diff.tv_sec > 0 || diff.tv_usec > 200000 || diff.tv_sec >= opt_log_interval))) 
+		{
+			hashmeter(thr->id, &diff, hash_count_done);
+			hash_count_done = 0;
+			diff.tv_sec = 0;
+			diff.tv_usec = 0;
+			cgtime(&diff_start);
+		}
 
-		timersub(&tv_history_finish, &tv_history_start, &tv_history_finish);
-		timeradd(&tv_history_finish, &(info->history_time), &(info->history_time));
+		cgtime(&loop_finish);
+		timersub(&loop_finish, &loop_start, &loop_elapsed);
 	}
-
-	return hash_count;
+	while((thr && !thr->work_restart) && info->keepwork && loop_elapsed.tv_sec < 60);
+	if (opt_debug)
+	{
+		applog(LOG_ERR, "\033[1;34m ==> %s%d: loop_elapsed.tv_sec = %d, thr = %x, !thr->work_restart = %x, info->keepwork = %x  <==\033[0m",
+                        dualminer->drv->name, dualminer->device_id, loop_elapsed.tv_sec, thr, !thr->work_restart, info->keepwork);
+	}
+	return 0;
 }
 
 static struct api_data *dualminer_api_stats(struct cgpu_info *cgpu)
@@ -1064,8 +1112,6 @@ static struct api_data *dualminer_api_stats(struct cgpu_info *cgpu)
 	root = api_add_const(root, "timing_mode", timing_mode_str(info->timing_mode), false);
 	root = api_add_bool(root, "is_timing", &(info->do_dualminer_timing), false);
 	root = api_add_int(root, "baud", &(info->baud), false);
-	root = api_add_int(root, "work_division", &(info->work_division), false);
-	root = api_add_int(root, "fpga_count", &(info->fpga_count), false);
 
 	return root;
 }

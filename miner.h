@@ -588,6 +588,7 @@ struct cgpu_info {
 
 	bool shutdown;
 
+	int cgpu_err_accumulation;
 	struct timeval dev_start_tv;
 };
 
